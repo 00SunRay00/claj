@@ -410,7 +410,7 @@ public class ClajConfig {
   public static Field<Integer> roomLimit = new Field<>("room-limit", fieldDescs.pop(), 16);
   public static Field<Short> clientLimit = new Field<>("client-limit", fieldDescs.pop(), (short)(1<<8));
   public static Field<Integer> spamLimit = new Field<>("spam-limit", fieldDescs.pop(), 1<<8);
-  public static Field<Integer> hostSpamLimit = new Field<>("host-spam-limit", fieldDescs.pop(), 1<<13);
+  public static Field<Integer> hostSpamLimit = new Field<>("host-spam-limit", fieldDescs.pop(), 1<<14);
   public static Field<Integer> joinLimit = new Field<>("join-limit", fieldDescs.pop(), 32);
   public static Field<Integer> infoLimit = new Field<>("info-limit", fieldDescs.pop(), 32);
   public static Field<Integer> listLimit = new Field<>("list-limit", fieldDescs.pop(), 32);
