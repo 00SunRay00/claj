@@ -20,8 +20,6 @@
 package com.xpdustry.claj.api;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.ExecutorService;
-
 import arc.net.NetListener;
 
 import com.xpdustry.claj.common.packets.RoomStatePacket;
@@ -32,17 +30,15 @@ import com.xpdustry.claj.common.status.*;
 /**
  * Interface to provide client implementation dependent things.
  * <p>
- * Everything must be thread-safe, as they will be run on proxy, pinger or calling thread. <br>
+ * Everything must be thread-safe, as they will be run on proxy, pinger or calling threads. <br>
  * With exception of proxy/pinger callbacks, including {@code show*} and {@link #connectClient} methods,
- * as they will be posted to the main thread via {@link #postTask}.
+ * as they will be posted to the main thread via {@link #postCallback}.
  */
 public interface ClajProvider {
-  /** Used to post tasks to the main thread, when receiving a packet or running callbacks. */
-  void postTask(Runnable task);
-  /** Executor used to post blocking connection tasks. If {@code null}, they will run and block the current thread. */
-  default ExecutorService getExecutor() { return null; }
-  // /** The ping executor used to post blocking ping tasks. */
-  // default ExecutorService getPingExecutor() { return getExecutor(); }
+  /** Used to post callbacks, usually non-blocking or short tasks, to the main thread. */
+  void postCallback(Runnable task);
+  /** Used to post blocking connection tasks. By default, will block the current thread. */
+  default void postConnect(Runnable task) { task.run(); }
 
   /** Used to create new proxy clients. Cannot be {@code null}. */
   default ClajProxy newProxy() { return new ClajProxy(this); }

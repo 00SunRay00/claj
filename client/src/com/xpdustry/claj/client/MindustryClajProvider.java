@@ -20,8 +20,6 @@
 package com.xpdustry.claj.client;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.ExecutorService;
-
 import arc.Core;
 import arc.func.Cons;
 import arc.net.*;
@@ -96,13 +94,13 @@ public class MindustryClajProvider implements ClajProvider {
   }
 
   @Override
-  public void postTask(Runnable task) {
-    Core.app.post(task);
+  public void postCallback(Runnable task) {
+    if (task != null) Core.app.post(task);
   }
 
   @Override
-  public ExecutorService getExecutor() {
-    return Vars.mainExecutor;
+  public void postConnect(Runnable task) {
+    if (task != null) Vars.mainExecutor.submit(task);
   }
 
   @Override
@@ -115,7 +113,7 @@ public class MindustryClajProvider implements ClajProvider {
     ClajReport.addError(error);
     if (proxy.roomCreated()) {
       proxy.quietErrors = true;
-      postTask(() -> Vars.ui.showException("@claj.room.error", error));
+      postCallback(() -> Vars.ui.showException("@claj.room.error", error));
     }
     Log.err("Error while hosting the room", error);
   }

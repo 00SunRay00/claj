@@ -36,6 +36,8 @@ import com.xpdustry.claj.api.net.VirtualConnection;
 
 
 public class MindustryClajProxy extends ClajProxy {
+  private boolean cleared = true;
+
   public MindustryClajProxy(ClajProvider provider) {
     super(provider);
     // Try to fix some issues with entities not loading when receiving world
@@ -119,7 +121,9 @@ public class MindustryClajProxy extends ClajProxy {
 
   @Override
   public void connect(String host, int port) throws IOException {
-    ClajReport.clearErrors();
+    // Do not clear errors yet, in case of an error on last hosting
+    cleared ^= true;
+    if (cleared) ClajReport.clearErrors();
     super.connect(host, port);
   }
 

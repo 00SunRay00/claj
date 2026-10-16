@@ -27,9 +27,11 @@ import arc.util.Threads;
 
 import com.xpdustry.claj.common.status.RejectReason;
 import com.xpdustry.claj.common.status.ServerState;
+import com.xpdustry.claj.common.util.Structs;
 
 
-// FIXME: it's not perfect, keep refreshing servers will fill up pingers, if one is unreachable.
+//FIXME: it's not perfect, keep refreshing servers will fill up pingers, if one is unreachable.
+//TODO: check if still happens
 public class ClajPingerManager {
   protected final int workers;
   protected final ClajProvider provider;
@@ -51,11 +53,11 @@ public class ClajPingerManager {
   public String getPingerName(int index) {
     return workers == 1 ? "Claj Pinger" : "Claj Pinger " + (index+1);
   }
-  public boolean hasCreatedPingers() {
+  public synchronized boolean hasCreatedPingers() {
     return created > 0;
   }
 
-  public int createdPingers() {
+  public synchronized int createdPingers() {
     return created;
   }
 
@@ -67,7 +69,7 @@ public class ClajPingerManager {
     return provider;
   }
 
-  public ClajPinger ensurePingerCreated(int index) {
+  public synchronized ClajPinger ensurePingerCreated(int index) {
     if (pingers[index] == null) {
       pingers[index] = provider.newPinger();
       created++;
@@ -75,7 +77,7 @@ public class ClajPingerManager {
     return pingers[index];
   }
 
-  public ClajPinger ensurePingerPingerStarted(int index) {
+  public synchronized ClajPinger ensurePingerPingerStarted(int index) {
     ClajPinger pinger = get(index);
     if (!pinger.isRunning()) {
       if (threads[index] != null) threads[index].interrupt(); // in case of
@@ -90,7 +92,7 @@ public class ClajPingerManager {
     return ensurePingerCreated(index);
   }
 
-  public ClajPinger getOrNull(int index) {
+  public synchronized ClajPinger getOrNull(int index) {
     return pingers[index];
   }
 
@@ -100,19 +102,19 @@ public class ClajPingerManager {
     return index == -1 ? null : get(index);
   }
 
-  public int findFreeI() {
+  public synchronized int findFreeI() {
     // First check if empty
     if (created == 0) {
       get();
       return 0;
     }
     // Prioritize existing free pingers
-    for(int i=0; i<workers; i++) {
-      if (pingers[i] != null && !isBusy(i)) return i;
+    for(int i=0; i<pingers.length; i++) {
+      if (getOrNull(i) != null && !isBusy(i)) return i;
     }
     // Then empty slots
-    for(int i=0; i<workers; i++) {
-      if (pingers[i] == null && !reserved[i]) {
+    for(int i=0; i<pingers.length; i++) {
+      if (getOrNull(i) == null && !reserved[i]) {
         get(i);
         return i;
       }
@@ -120,14 +122,14 @@ public class ClajPingerManager {
     return -1;
   }
 
-  public boolean isBusy(int index) {
+  public synchronized boolean isBusy(int index) {
     if (reserved[index]) return true;
-    ClajPinger pinger = pingers[index];
+    ClajPinger pinger = getOrNull(index);
     return pinger != null && pinger.isWorking();
   }
 
   /** Dispose all pingers. */
-  public void dispose() {
+  public synchronized void dispose() {
     cancel();
     for (ClajPinger pinger : pingers) {
       if (pinger == null) continue;
@@ -135,10 +137,14 @@ public class ClajPingerManager {
       try { pinger.dispose(); }
       catch (Exception _) {}
     }
+    for (Thread t : threads) {
+      if (t == null) continue;
+      t.interrupt();
+    }
   }
 
   /** Stop all pingers and cancel the queue. */
-  public void stop() {
+  public synchronized void stop() {
     cancel();
     for (ClajPinger pinger : pingers) {
       if (pinger != null) pinger.stop();
@@ -146,28 +152,28 @@ public class ClajPingerManager {
   }
 
   /** Cancel the queue and current tasks. */
-  public void cancel() {
-    //arc.util.Log.info("manager start: @, @", Thread.currentThread().getName(), System.currentTimeMillis());
+  public synchronized void cancel() {
     for (ClajPinger pinger : pingers) {
       if (pinger == null) continue;
       pinger.setCancelState(true);
       pinger.close(); // be sure
     }
-    //arc.util.Log.info("manager in: @, @", Thread.currentThread().getName(), System.currentTimeMillis());
+
     // Run rest of the queue
-    if (!queue.isEmpty()) {
-      // We don't care about who will receive the task, this will not block anyway
-      while (!queue.isEmpty()) {
-        queue.removeFirst().get(get(), () -> {});
-        //arc.util.Log.info("dequeueing: @", queue.size);
-      }
+    // We don't care about who will receive the task, this will not block anyway
+    //FIXME: not sure of that =/
+    while (!queue.isEmpty()) {
+      Cons2<ClajPinger, Runnable> task = queue.removeFirst();
+      try { provider.postConnect(() -> task.get(get(), () -> {})); }
+      catch (Exception _) {}
     }
+
     for (ClajPinger pinger : pingers) {
       if (pinger == null) continue;
       pinger.close(); // be sure
       pinger.setCancelState(false);
     }
-    //arc.util.Log.info("manager out: @, @", Thread.currentThread().getName(), System.currentTimeMillis());
+    for (int i=0; i<pingers.length; i++) reserved[i] = false;
   }
 
   /** Queue the task if all pingers are busy. */
@@ -177,99 +183,62 @@ public class ClajPingerManager {
     else queue.add(task);
   }
 
-  @SuppressWarnings("resource")
-  protected void submit(int index, Cons2<ClajPinger, Runnable> task) {
+  protected synchronized void submit(int index, Cons2<ClajPinger, Runnable> task) {
     reserved[index] = true;
     Runnable t = () -> {
       ClajPinger pinger = ensurePingerPingerStarted(index);
       task.get(pinger, () -> {
-        //arc.util.Log.info("pinger @ finished. queue empty? @", index, queue.isEmpty());
-        if (pinger.canceling || queue.isEmpty()) reserved[index] = false;
-        // Keep reserved, execute next
-        else submit(index, queue.removeFirst());
+        synchronized (this) {
+          //arc.util.Log.info("pinger @ finished. queue empty? @", index, queue.isEmpty());
+          if (pinger.canceling || queue.isEmpty()) reserved[index] = false;
+          // Keep reserved, execute next
+          else submit(index, queue.removeFirst());
+        }
       });
     };
 
-    try {
-      if (provider.getExecutor() == null) t.run();
-      else provider.getExecutor().submit(t);
-    } catch (Exception e) {
-      reserved[index] = false; // in case of
+    try { provider.postConnect(t); }
+    catch (Exception e) { // in case of
+      reserved[index] = false;
       throw e;
     }
   }
 
   public void joinRoom(ClajLink link, Runnable success, Cons<RejectReason> reject, Cons<Exception> failed) {
     if (link == null) return;
-    submit((pinger, finished) -> {
-      pinger.joinRoom(link.host, link.port, link.roomId, join -> {
-        provider.connectClient(link.host, link.port, success, join);
-        finished.run();
-      }, reason -> {
-        if (reject != null) reject.get(reason);
-        finished.run();
-      }, e -> {
-        if (failed != null) failed.get(e);
-        finished.run();
-      });
-    });
+    submit((pinger, finished) -> pinger.joinRoom(
+      link.host, link.port, link.roomId,
+      Structs.and(j -> provider.connectClient(link.host, link.port, success, j), finished),
+      Structs.and(reject, finished), Structs.and(failed, finished)
+    ));
   }
 
   public void joinRoom(ClajLink link, short password, Runnable success, Cons<RejectReason> reject,
                        Cons<Exception> failed) {
     if (link == null) return;
-    submit((pinger, finished) -> {
-      pinger.joinRoom(link.host, link.port, link.roomId, password, join -> {
-        provider.connectClient(link.host, link.port, success, join);
-        finished.run();
-      }, reason -> {
-        if (reject != null) reject.get(reason);
-        finished.run();
-      }, e -> {
-        if (failed != null) failed.get(e);
-        finished.run();
-      });
-    });
+    submit((pinger, finished) -> pinger.joinRoom(
+      link.host, link.port, link.roomId, password,
+      Structs.and(j -> provider.connectClient(link.host, link.port, success, j), finished),
+      Structs.and(reject, finished), Structs.and(failed, finished)
+    ));
   }
 
   /** This queues new tasks if a ping is already in progress. */
   public void pingHost(String ip, int port, Cons<ServerState> success, Cons<Exception> failed) {
-    submit((pinger, finished) -> {
-      pinger.pingHost(ip, port, i -> {
-        if (success != null) success.get(i);
-        finished.run();
-      }, e -> {
-        if (failed != null) failed.get(e);
-        finished.run();
-      });
-    });
+    submit((pinger, finished) ->
+      pinger.pingHost(ip, port, Structs.and(success, finished), Structs.and(failed, finished)));
   }
 
   public <T> void serverRooms(String ip, int port, Cons<Seq<ClajRoom<T>>> rooms, Cons<Exception> failed) {
-    submit((pinger, finished) -> {
-      pinger.<T>requestRoomList(ip, port, r -> {
-        if (rooms != null) rooms.get(r);
-        finished.run();
-      }, error -> {
-        if (failed != null) failed.get(error);
-        finished.run();
-      });
-    });
+    submit((pinger, finished) ->
+      pinger.<T>requestRoomList(ip, port, Structs.and(rooms, finished), Structs.and(failed, finished)));
   }
 
   public <T> void requestRoomInfo(ClajLink link, Cons<ClajRoom<T>> info, Runnable notFound, Cons<Exception> failed) {
     if (link == null) return;
-    submit((pinger, finished) -> {
-      pinger.<T>requestRoomInfo(link.host, link.port, link.roomId, r -> {
-        if (info != null) info.get(r);
-        finished.run();
-      }, () -> {
-        if (notFound != null) notFound.run();
-        finished.run();
-      }, error -> {
-        if (failed != null) failed.get(error);
-        finished.run();
-      });
-    });
+    submit((pinger, finished) -> pinger.<T>requestRoomInfo(
+      link.host, link.port, link.roomId,
+      Structs.and(info, finished), Structs.and(notFound, finished), Structs.and(failed, finished)
+    ));
   }
 }

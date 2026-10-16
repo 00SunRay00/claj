@@ -38,11 +38,12 @@ subprojects {
     options.compilerArgs += ["-Xlint:-options", "-Xlint:unchecked"]
   }
 
+  // Add desugarizer
   dependencies {
     annotationProcessor "com.xpdustry:jabel:1.1.1"
   }
 
-  // Make fat jar
+  // Make fat jar for release
   task release(type: Jar, dependsOn: build) {
     def releaseJar = { ModPlatform.ANDROID in toxopid.platforms.get() ? mergeJar : jar }
     dependsOn releaseJar
@@ -58,6 +59,13 @@ subprojects {
     destinationDirectory = rootProject.layout.buildDirectory.dir(name)
   }
 }
+
+// Disable toxopid testing tasks
+allprojects {
+  runMindustryDesktop.enabled = false
+  runMindustryServer.enabled = false
+}
+
 
 // Projects configuration
 project(":common") {
@@ -107,8 +115,9 @@ project(":client") {
   assemble.dependsOn mergeJar
 
   // For testing
-  runMindustryDesktop.mods.from mergeJar
-  task run(dependsOn: runMindustryDesktop) {}
+  runMindustryDesktop.enabled = true
+  runMindustryDesktop.mods.from mergeDependenciesForDexJar //meh
+  task run(dependsOn: runMindustryDesktop) {} //alias
 }
 
 project(":server") {

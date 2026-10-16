@@ -23,6 +23,7 @@ import arc.func.Cons;
 import arc.util.Threads;
 
 import com.xpdustry.claj.common.status.CloseReason;
+import com.xpdustry.claj.common.util.Structs;
 
 
 public class ClajProxyManager {
@@ -50,7 +51,7 @@ public class ClajProxyManager {
     return created > 0;
   }
 
-  public int createdProxies() {
+  public synchronized int createdProxies() {
     return created;
   }
 
@@ -62,7 +63,7 @@ public class ClajProxyManager {
     return provider;
   }
 
-  public ClajProxy ensureCreated(int index) {
+  public synchronized ClajProxy ensureCreated(int index) {
     ClajProxy proxy = proxies[index];
     if (proxy != null) return proxy;
     proxies[index] = proxy = provider.newProxy();
@@ -70,7 +71,7 @@ public class ClajProxyManager {
     return proxy;
   }
 
-  public ClajProxy ensureStarted(int index) {
+  public synchronized ClajProxy ensureStarted(int index) {
     ClajProxy proxy = get(index);
     if (!proxy.isRunning()) {
       if (threads[index] != null) threads[index].interrupt(); // in case of
@@ -85,7 +86,7 @@ public class ClajProxyManager {
     return ensureCreated(index);
   }
 
-  public ClajProxy getOrNull(int index) {
+  public synchronized ClajProxy getOrNull(int index) {
     return proxies[index];
   }
 
@@ -95,18 +96,18 @@ public class ClajProxyManager {
     return index == -1 ? null : get(index);
   }
 
-  public int findFreeI() {
+  public synchronized int findFreeI() {
     if (!hasCreatedProxies()) {
       get();
       return 0;
     }
     // First, try to find a free proxy
     for (int i=0; i<proxies.length; i++) {
-      if (proxies[i] != null && !isBusy(i)) return i;
+      if (getOrNull(i) != null && !isBusy(i)) return i;
     }
     // Else, find an empty slot
     for (int i=0; i<proxies.length; i++) {
-      if (proxies[i] == null && !reserved[i]) {
+      if (getOrNull(i) == null && !reserved[i]) {
         get(i);
         return i;
       }
@@ -114,9 +115,9 @@ public class ClajProxyManager {
     return -1;
   }
 
-  public boolean isBusy(int index) {
+  public synchronized boolean isBusy(int index) {
     if (reserved[index]) return true;
-    ClajProxy proxy = proxies[index];
+    ClajProxy proxy = getOrNull(index);
     return proxy != null && (proxy.roomCreated() || proxy.isConnecting());
   }
 
@@ -137,7 +138,7 @@ public class ClajProxyManager {
   }
 
   /** Search whether a proxy have an open room. */
-  public boolean hasOpenRoom() {
+  public synchronized boolean hasOpenRoom() {
     for (ClajProxy proxy : proxies) {
       if (proxy != null && proxy.roomCreated()) return true;
     }
@@ -153,7 +154,7 @@ public class ClajProxyManager {
     proxy.close();
   }
 
-  public void closeAllRooms() {
+  public synchronized void closeAllRooms() {
     for (ClajProxy proxy : proxies) {
       if (proxy == null) continue;
       proxy.closeRoom();
@@ -162,7 +163,7 @@ public class ClajProxyManager {
   }
 
   /** Dispose all proxies. */
-  public void dispose() {
+  public synchronized void dispose() {
     for (ClajProxy proxy : proxies) {
       if (proxy == null) continue;
       proxy.closeRoom();
@@ -173,7 +174,7 @@ public class ClajProxyManager {
   }
 
   /** Close all rooms and stop all proxies. */
-  public void stop() {
+  public synchronized void stop() {
     for (ClajProxy proxy : proxies) {
       if (proxy == null) continue;
       proxy.closeRoom();
@@ -198,9 +199,8 @@ public class ClajProxyManager {
     return createRoom(index, host, port, created, closed, failed);
   }
 
-  @SuppressWarnings("resource")
-  public ClajProxy createRoom(int index, String host, int port, Cons<ClajLink> created, Cons<CloseReason> closed,
-                         Cons<Throwable> failed) {
+  public synchronized ClajProxy createRoom(int index, String host, int port, Cons<ClajLink> created,
+                                           Cons<CloseReason> closed, Cons<Throwable> failed) {
     if (isBusy(index)) {
       failed.get(new RuntimeException("Room is already created, please close it before"));
       return null;
@@ -208,21 +208,17 @@ public class ClajProxyManager {
     ClajProxy proxy = ensureStarted(index);
     reserved[index] = true;
 
-    Runnable task = () -> {
-      proxy.createRoom(host, port, created, reason -> {
-        if (closed != null) closed.get(reason);
+    Runnable release = () -> {
+      synchronized (this) {
         reserved[index] = false;
-      }, error -> {
-        if (failed != null) failed.get(error);
-        reserved[index] = false;
-      });
+      }
     };
+    Runnable task = () ->
+      proxy.createRoom(host, port, created, Structs.and(closed, release), Structs.and(failed, release));
 
-    try {
-      if (provider.getExecutor() == null) task.run();
-      else provider.getExecutor().submit(task);
-    } catch (Exception e) {
-      reserved[index] = false; // in case of
+    try { provider.postConnect(task); }
+    catch (Exception e) { // in case of
+      release.run();
       throw e;
     }
 

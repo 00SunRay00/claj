@@ -45,9 +45,22 @@ public class ClajConfig {
   public static void init() {
     settings = new JsonSettings(new Fi(fileName, Files.FileType.local), true, true, true, false);
 
-    settings.addSerializer(ClajType.class, new Json.Serializer<ClajType>() {
+    settings.addSerializer(ClajType.class, new Json.Serializer<>() {
       public void write(Json json, ClajType object, Class knownType) { json.writeValue(object.type());}
-      public ClajType read(Json json, JsonValue jsonData, Class type) { return ClajType.of(jsonData.asString()); }
+      public ClajType read(Json json, JsonValue jsonData, Class type) {
+        ClajType t = ClajType.of(jsonData.asString());
+        if (t == null) throw new SerializationException("Invalid CLaJ Type");
+        return t;
+      }
+    });
+    // Add more boolean cases
+    settings.addSerializer(Boolean.class, new Json.Serializer<>() {
+      public void write(Json json, Boolean object, Class knownType) { json.writeValue(object); }
+      public Boolean read(Json json, JsonValue jsonData, Class type) {
+        Boolean v = Strings.parsePrimitive(Boolean.class, jsonData.asString());
+        if (v == null) throw new SerializationException("Invalid boolean value");
+        return v;
+      }
     });
   }
 
@@ -108,10 +121,13 @@ public class ClajConfig {
     public Field(String key, String desc, T def, Cons<T> changed, boolean register) {
       if (key == null || (key = key.trim()).isEmpty()) throw new IllegalArgumentException("'key' is null");
       if (ClajConfig.get(key) != null) throw new IllegalArgumentException("Field '" + key + "' already exists");
+      if (key.equals("reload")) throw new IllegalArgumentException("Reserved key name '" + key + "'");
+      if (def == null) throw new IllegalArgumentException("Default value cannot be null");
+
       this.key = key;
       this.desc = desc == null ? "" : desc;
       this.defaultValue = def;
-      this.type = def == null ? null : (Class<T>)def.getClass();
+      this.type = (Class<T>)def.getClass();
       this.changed = changed == null ? _ -> {} : changed;
 
       if (register) all.add(this);
@@ -134,7 +150,8 @@ public class ClajConfig {
     protected T checkValue(T value) {
       if (value == null || value.getClass() != type) {
         String valueType = value == null ? null : value.getClass().getName();
-        throw new IllegalArgumentException("Invalid value type for " + name() + "; " + valueType + "!=" + type.getName());
+        String msg = "Invalid value type for " + name() + "; " + valueType + "!=" + type.getName();
+        throw new IllegalArgumentException(msg);
       }
       return value;
     }
@@ -203,6 +220,7 @@ public class ClajConfig {
 
     /** Adds changed callback. */
     public void changed(Cons<T> changed) {
+      // Too lazy for a list, just chain that
       Cons<T> old = this.changed;
       this.changed = v -> {
         old.get(v);
@@ -225,22 +243,15 @@ public class ClajConfig {
      */
     public T decode(String value) throws IllegalArgumentException {
       // Fast path
-      if (type == null) return (T)(Boolean)value.equals("null");
-      if (type == String.class) return (T)value;
-      if (type == Boolean.class) {
-        if (Strings.isTrue(value)) return (T)Boolean.TRUE;
-        if (Strings.isFalse(value)) return (T)Boolean.FALSE;
-        throw new IllegalArgumentException("Invalid boolean value");
-      }
-      // Slow path using json decoding
-      try {
-        T decoded = decodeValue(value);
-        if (decoded == null) throw new IllegalArgumentException("Decoded value cannot be null");
-        if (decoded.getClass() == type) return decoded;
-        throw new IllegalArgumentException("Decoded value must be a " + type.getSimpleName());
-      } catch (SerializationException e) {
-        throw new IllegalArgumentException(e);
-      }
+      T decoded = Strings.parsePrimitive(type, value);
+      if (decoded != null) return decoded;
+      if (type == Boolean.class) throw new IllegalArgumentException("Invalid boolean value");
+      // Slow path via json decoding
+      try { decoded = decodeValue(value); }
+      catch (SerializationException e) { throw new IllegalArgumentException(e.getMessage(), e); }
+      if (decoded == null) throw new IllegalArgumentException("Decoded value cannot be null");
+      if (decoded.getClass() == type) return decoded;
+      throw new IllegalArgumentException("Decoded value must be a " + type.getSimpleName());
     }
   }
 
@@ -263,25 +274,38 @@ public class ClajConfig {
       this.elementType = elementType;
       defaultMaker = def;
     }
+
     protected ObjectSet<T> loadValue() { return settings.getOrPut(key, type, elementType, defaultMaker); }
     protected void saveValue() { settings.put(key, elementType, value.toSeq()); }
     public ObjectSet<T> getDefault() { return defaultMaker.get(); }
     protected ObjectSet<T> decodeValue(String value) { return settings.getJson().fromJson(type, elementType, value); }
+    public T decodeElement(String value) throws IllegalArgumentException {
+      try { return settings.getJson().fromJson(elementType, value); }
+      catch (SerializationException e) { throw new IllegalArgumentException(e.getMessage(), e); }
+    }
 
     public boolean add(T value) {
       boolean added = get().add(value);
-      notifyChange();
+      if (added) notifyChange();
       return added;
     }
     public boolean remove(T value) {
       boolean removed = get().remove(value);
-      notifyChange();
+      if (removed) notifyChange();
       return removed;
     }
-    public boolean contains(T value) { return get().contains(value); }
+    public boolean contains(T value) {
+      return get().contains(value);
+    }
     public void clear() {
       get().clear();
       notifyChange();
+    }
+
+    @Override
+    public String toString() {
+      return get().isEmpty() ? "[]" :
+             "[\n  " + Strings.tableify(get().toSeq().map(o -> "\"" + o + "\","), 128).toString("\n  ") + "\n]";
     }
   }
 
@@ -370,7 +394,9 @@ public class ClajConfig {
       This increases speed and processing capacity, at the cost of double or triple of the RAM
       and slightly higher CPU usage. This can be helpful for heavy load servers.
       &fiWARNING: this is currently experimental, setting this to false can break things.&fr
-      """.trim()
+      """.trim(),
+      "IP Address Blacklist.",
+      "CLaJ Type Blacklist"
   ).reverse();
 
   /** Must be set at initialization and not modified after. {@code -1} means not initialized. */
@@ -402,10 +428,8 @@ public class ClajConfig {
   public static Field<Integer> raterLifetime = new Field<>("rater-tifetime", fieldDescs.pop(), 5 * 60);
   public static Field<Integer> afkTime = new Field<>("afk-time", fieldDescs.pop(), 2 * 60);
   public static Field<Boolean> dualThread = new Field<>("dual-thread", fieldDescs.pop(), true);
-
-  // Other fields having their own command
-  public static SetField<String> blacklist = new SetField<>("blacklist", "", String.class, ObjectSet::new);
-  public static SetField<ClajType> typeBlacklist = new SetField<>("type-blacklist", "", ClajType.class, ObjectSet::new);
+  public static SetField<String> blacklist = new SetField<>("blacklist", fieldDescs.pop(), String.class, ObjectSet::new);
+  public static SetField<ClajType> typeBlacklist = new SetField<>("type-blacklist", fieldDescs.pop(), ClajType.class, ObjectSet::new);
 
   static { fieldDescs = null; } // remove cached desc fields
 }

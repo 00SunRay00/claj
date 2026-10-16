@@ -24,6 +24,8 @@ import java.util.Scanner;
 import arc.ApplicationListener;
 import arc.Core;
 import arc.Events;
+import arc.func.Cons;
+import arc.func.Cons2;
 import arc.util.CommandHandler;
 import arc.util.Log;
 import arc.util.Threads;
@@ -108,16 +110,26 @@ public class ClajControl extends CommandHandler implements ApplicationListener {
     }
   }
 
-  @SuppressWarnings("unused")
+  @SuppressWarnings("unchecked")
   public void registerCommands() {
-    register("help", "Display the command list.", args -> {
-      Log.info("Commands:");
-      getCommandList().each(c ->
+    register("help", "[command]", "Display the command list.", args -> {
+      if (args.length == 0) {
+        Log.info("Commands: [total: @]", getCommandList().size);
+        getCommandList().each(c ->
+          Log.info("&lk|&fr &b&lb" + c.text + (c.paramText.isEmpty() ? "" : " &lc&fi") + c.paramText +
+                   "&fr - &lw" + c.description));
+        return;
+      }
+      Command c = getCommandList().find(t -> t.text.equals(args[0]));
+      if (c == null) Log.err("Command not found.");
+      else {
+        Log.info(Strings.capitalize(c.text) + ":");
         Log.info("&lk|&fr &b&lb" + c.text + (c.paramText.isEmpty() ? "" : " &lc&fi") + c.paramText +
-                 "&fr - &lw" + c.description));
+                 "&fr - &lw" + c.description);
+      }
     });
 
-    register("status", "Display status of server and rooms.", args -> {
+    register("status", "Display status of server and rooms.", _ -> {
       ClajStateSummary state = ClajStateSummary.now();
       Log.info("CLaJ Node Status:");
       Log.info("&lk|&fr Version: CLaJ @ (@), Java @", state.version, state.majorVersion, state.javaVersion);
@@ -180,20 +192,20 @@ public class ClajControl extends CommandHandler implements ApplicationListener {
       }
     });
 
-    register("gc", "Trigger a garbage collection.", args -> {
+    register("gc", "Trigger a garbage collection.", _ -> {
       long pre = Core.app.getJavaHeap();
       System.gc();
       long post = Core.app.getJavaHeap();
       Log.info("@ collected. Heap usage now at @.", Strings.formatBytes(pre - post), Strings.formatBytes(post));
     });
 
-    register("yes", "Run the last suggested incorrect command.", args -> {
+    register("yes", "Run the last suggested incorrect command.", _ -> {
       if(suggested != null) handleCommand(suggested);
       else Log.err("There is nothing to say yes to.");
     });
 
     //TODO: add argument to delay closure or waits until all room closed
-    register("exit", "Stop the server.", args -> {
+    register("exit", "Stop the server.", _ -> {
       Log.info("Shutting down CLaJ server.");
       ClajVars.relay.stop(Core.app::exit);
     });
@@ -352,20 +364,22 @@ public class ClajControl extends CommandHandler implements ApplicationListener {
       }
     });
 
-    //TODO: handle SetField directly
-    register("config", "[name] [default|value...]", "Configure server settings.", args -> {
+    register("config", "[reload|name] [default|set|add|remove|clear] [value...]", "Configure server settings.",
+    args -> {
       if (args.length == 0) {
         Log.info("Config values: [total: @]", ClajConfig.all.size);
-        // Ignore blacklist and type-blacklist as these are managed with dedicated commands.
-        ClajConfig.all.each(f -> !(f instanceof ClajConfig.SetField), f -> {
-          Log.info("&lk|&fr @: @", f.key, "&lc&fi" + f.get());
-          for (String line : f.desc.split("\n")) {
-            Log.info("&lk| |&lw " + line);
+        ClajConfig.all.each(f -> {
+          boolean first = true;
+          for (String line : f.toString().split("\n")) {
+            if (first) Log.info("&lk|&fr @: &lc&fi" + line, f.key);
+            else Log.info("&lk|&fr &lc&fi" + line);
+            first = false;
           }
+          for (String line : f.desc.split("\n"))
+            Log.info("&lk| |&lw " + line);
           Log.info("&lk|&fr");
         });
         return;
-
       } else if (args[0].equals("reload")) {
         try {
           ClajConfig.reload();
@@ -377,175 +391,110 @@ public class ClajControl extends CommandHandler implements ApplicationListener {
       }
 
       ClajConfig.Field<Object> field = ClajConfig.get(args[0]);
+      Object value;
 
       if (field == null) {
         Log.err("No setting named '@' found.", args[0]);
         return;
       } else if (args.length == 1) {
-        Log.info("'@' is currently at @.", field.key, field.get());
+        Log.info("'@' is currently at @.", field.key, "&lc&fi" + field);
         Log.info("Default value is: @.", field.defaultValue);
         return;
-      } else if (args[1].equals("default")) {
-        field.setDefault();
-        Log.info("'@' set to default value.", field.key);
-        return;
       }
 
-      try {
-        Object value = field.decode(args[1]);
-        field.set(value);
-        Log.info("'@' set to @.", field.key, value);
-      } catch (IllegalArgumentException e) {
-        Log.err("Invalid value for setting '@'.", field.key);
-      }
-    });
+      switch (args[1]) {
+        case "default":
+          field.setDefault();
+          Log.info("'@' set to default value.", field.key);
+          break;
 
-    register("blacklist", "[add|remove|clear] [IP]", "Manage the IP blacklist.", args -> {
-      if (args.length == 0) {
-        if (!ClajConfig.blacklist.get().isEmpty()) {
-          Log.info("Blacklist: [total: @]", ClajConfig.blacklist.get().size);
-          Strings.tableify(ClajConfig.blacklist.get().toSeq(), 70).each(a -> Log.info("&lk|&fr @", a));
-        } else Log.info("Blacklist is empty.");
-        return;
-      } else if (args.length == 1) {
-        Log.err("Missing IP argument.");
-        return;
-      }
+        case "set":
+          value = getValue(field, args, 2, false);
+          if (value == null) return;
+          field.set(value);
+          Log.info("'@' set to @.", field.key, value);
+          break;
 
-      switch (args[0]) {
         case "add":
-          if (ClajConfig.blacklist.add(args[1]))
-            Log.info("IP added to blacklist.");
-          else Log.err("IP already blacklisted.");
+          if (!(field instanceof ClajConfig.SetField set)) {
+            Log.err("Invalid operation for '@'.", field.key);
+            return;
+          }
+          value = getValue(field, args, 2, true);
+          if (value == null) return;
+          if (set.add(value)) Log.info("@ added to '@'.", value, field.key);
+          else Log.err("@ not in '@'.", value, field.key);
           break;
 
         case "remove":
-          if (ClajConfig.blacklist.remove(args[1]))
-            Log.info("IP removed from blacklist.");
-          else Log.err("IP not blacklisted.");
+          if (!(field instanceof ClajConfig.SetField set)) {
+            Log.err("Invalid operation for '@'.", field.key);
+            return;
+          }
+          value = getValue(field, args, 2, true);
+          if (value == null) return;
+          if (set.remove(value)) Log.info("@ removed from '@'.", value, field.key);
+          else Log.err("@ not in '@'.", value, field.key);
           break;
 
         case "clear":
-          ClajConfig.blacklist.clear();
-          Log.info("Blacklist cleared.");
+          if (!(field instanceof ClajConfig.SetField set)) {
+            Log.err("Invalid operation for '@'.", field.key);
+            return;
+          }
+          set.clear();
+          Log.info("Cleared '@' list.", field.key);
           break;
 
         default:
-          Log.err("Invalid argument. Must be 'add', 'remove', 'clear' or nothing.");
+          Log.err("Invalid argument! Must be 'default', 'set', 'add', 'remove' or 'clear'.");
       }
     });
 
-    register("type-blacklist", "[add|remove|clear] [type...]", "Manage the blacklisted room types.", args -> {
-      if (args.length == 0) {
-        if (!ClajConfig.typeBlacklist.get().isEmpty()) {
-          Log.info("Type blacklist: [total: @]", ClajConfig.typeBlacklist.get().size);
-          Strings.tableify(ClajConfig.typeBlacklist.get().toSeq().map(ClajType::type), 70)
-                 .each(a -> Log.info("&lk|&fr @", a));
-        } else Log.info("Type blacklist is empty.");
-        return;
-      } else if (args.length == 1) {
-        Log.err("Missing 'type' argument.");
-        return;
-      }
+    register("say", "<room|list|all> <id|type|text> [text...]", "Send a message to room(s) client(s).",
+             notifyCommand("Message", ClajRoom::message));
 
-      ClajType type;
-      switch (args[0]) {
-        case "add":
-          type = ClajType.of(args[1]);
-          if (type == null) Log.err("Invalid CLaJ type.");
-          else if (ClajConfig.typeBlacklist.add(type)) Log.info("Type added to blacklist.");
-          else Log.err("Type already blacklisted.");
-          break;
-
-        case "remove":
-          type = ClajType.of(args[1]);
-          if (type == null) Log.err("Invalid CLaJ type.");
-          else if (ClajConfig.typeBlacklist.remove(type)) Log.info("Type removed from blacklist.");
-          else Log.err("Type not blacklisted.");
-          break;
-
-        case "clear":
-          ClajConfig.typeBlacklist.clear();
-          Log.info("Type nblacklist cleared.");
-          break;
-
-        default:
-          Log.err("Invalid argument. Must be 'add', 'remove', 'clear' or nothing.");
-      }
-    });
-
-    register("say", "<room|list|all> <id|type|text> [text...]", "Send a message to a room or all rooms.", args -> {
-      switch (args[0]) {
-        case "room":
-          ClajRoom room = getRoom(args[1]);
-          if (room == null) return;
-          if (args.length == 2) {
-            Log.err("Missing 'text' argument!");
-            return;
-          }
-          room.message(args[2]);
-          Log.info("Message sent to room @.", args[1]);
-          break;
-
-        case "list":
-          ClajType type = getType(args[1]);
-          if (type == null) return;
-          if (args.length == 2) {
-            Log.err("Missing 'text' argument!");
-            return;
-          }
-          ClajVars.relay.types.get(type).eachValue(r -> r.message(args[2]));
-          Log.info("Message sent to @ rooms of type @.", ClajVars.relay.types.get(type).size, type);
-          break;
-
-        case "all":
-          String text = Strings.join(" ", args, 1, args.length);
-          ClajVars.relay.rooms.eachValue(r -> r.message(text));
-          Log.info("Message sent to @ rooms.", ClajVars.relay.rooms.size);
-          break;
-
-        default:
-          Log.err("Invalid argument! Must be 'room', 'list' or 'all'.");
-      }
-    });
-
-    register("alert", "<room|list|all> <id|type|text> [text...]",
-             "Send a popup message to the host of a room or all rooms.", args -> {
-      switch (args[0]) {
-        case "room":
-          ClajRoom room = getRoom(args[1]);
-          if (room == null) return;
-          if (args.length == 2) {
-            Log.err("Missing 'text' argument!");
-            return;
-          }
-          room.popup(args[2]);
-          Log.info("Popup sent to the host of room @.", args[1]);
-          break;
-
-        case "list":
-          ClajType type = getType(args[1]);
-          if (type == null) return;
-          if (args.length == 2) {
-            Log.err("Missing 'text' argument!");
-            return;
-          }
-          ClajVars.relay.types.get(type).eachValue(r -> r.popup(args[2]));
-          Log.info("Popup sent to @ rooms of type @.", ClajVars.relay.types.get(type).size, type);
-          break;
-
-        case "all":
-          String text = Strings.join(" ", args, 1, args.length);
-          ClajVars.relay.rooms.eachValue(r -> r.popup(text));
-          Log.info("Popup sent to @ rooms.", ClajVars.relay.rooms.size);
-          break;
-
-        default:
-          Log.err("Invalid argument! Must be 'room', 'list' or 'all'.");
-      }
-    });
+    register("alert", "<room|list|all> <id|type|text> [text...]", "Send a popup message to room(s) host.",
+             notifyCommand("Popup", ClajRoom::popup));
   }
 
+
+  private Cons<String[]> notifyCommand(String actionName, Cons2<ClajRoom, String> action) {
+    return args -> {
+      switch (args[0]) {
+        case "room":
+          ClajRoom room = getRoom(args[1]);
+          if (room == null) return;
+          if (args.length == 2) {
+            Log.err("Missing 'text' argument!");
+            return;
+          }
+          action.get(room, args[2]);
+          Log.info(actionName + " sent to the host of room @.", args[1]);
+          break;
+
+        case "list":
+          ClajType type = getType(args[1]);
+          if (type == null) return;
+          if (args.length == 2) {
+            Log.err("Missing 'text' argument!");
+            return;
+          }
+          ClajVars.relay.types.get(type).eachValue(r -> action.get(r, args[2]));
+          Log.info(actionName + " sent to @ rooms of type @.", ClajVars.relay.types.get(type).size, type);
+          break;
+
+        case "all":
+          String text = Strings.join(" ", args, 1, args.length);
+          ClajVars.relay.rooms.eachValue(r -> action.get(r, text));
+          Log.info(actionName + " sent to @ rooms.", ClajVars.relay.rooms.size);
+          break;
+
+        default:
+          Log.err("Invalid argument! Must be 'room', 'list' or 'all'.");
+      }
+    };
+  }
 
   protected ClajRoom getRoom(String arg) {
     ClajRoom room = ClajVars.relay.getRoom(arg);
@@ -570,5 +519,24 @@ public class ClajControl extends CommandHandler implements ApplicationListener {
               Strings.toSentence(Structs.iterable(CloseReason.all), CloseReason::name));
     }
     return reason;
+  }
+
+  @SuppressWarnings("rawtypes")
+  protected Object getValue(ClajConfig.Field<Object> field, String[] args, int from, boolean isElement) {
+    if (args.length <= from) {
+      Log.err("Missing 'value' argument.");
+      return null;
+    }
+    String value = Strings.join(" ", args, from, args.length);
+    if (value.equalsIgnoreCase("null")) {
+      Log.err("Value cannot be null.");
+      return null;
+    }
+    try { return isElement ? ((ClajConfig.SetField)field).decodeElement(value) : field.decode(value); }
+    catch (IllegalArgumentException e) {
+      String m = e.getMessage();
+      Log.err("Invalid value for setting '@'" + (m != null ? ": @." : "."), field.key, m);
+      return null;
+    }
   }
 }

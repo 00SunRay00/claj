@@ -22,6 +22,7 @@ package com.xpdustry.claj.common.util;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
+import arc.func.Cons;
 import arc.func.Func;
 import arc.func.Intf;
 import arc.util.Reflect;
@@ -101,5 +102,26 @@ public class Structs extends arc.util.Structs {
       first = false;
     }
     return index;
+  }
+
+  public static Runnable and(Runnable base, Runnable other) {
+    return other == null && base == null ? () -> {}
+         : other == null ? base
+         : base == null ? other
+         : () -> { base.run(); other.run(); };
+  }
+
+  public static <T> Cons<T> and(Cons<T> base, Runnable other) {
+    return o -> {
+      if (base != null) base.get(o);
+      if (other != null) other.run();
+    };
+  }
+
+  public static <T> Cons<T> and(Cons<T> base, Cons<T> other) {
+    return other == null && base == null ? _ -> {}
+         : other == null ? base
+         : base == null ? other
+         : o -> { base.get(o); other.get(o); };
   }
 }

@@ -342,7 +342,6 @@ public class Strings extends arc.util.Strings {
     return Structs.max(list, String::length);
   }
 
-  //TODO: need to merge these three methods in one StringBuilder
   public static String normalize(String str) {
     return stripGlyphs(stripColors(str)).trim();
   }
@@ -661,5 +660,24 @@ public class Strings extends arc.util.Strings {
     String result = str.substring(0, length);
     if (str.charAt(length) != ' ') result = result.substring(0, result.lastIndexOf(" "));
     return result + ellipsis;
+  }
+
+  /** @return the parsed primitive object, else {@code null}. */
+  @SuppressWarnings("unchecked")
+  public static <T> T parsePrimitive(Class<T> type, String value) {
+    if (type == Boolean.class) {
+      if (isTrue(value)) return (T)Boolean.TRUE;
+      if (isFalse(value)) return (T)Boolean.FALSE;
+      return null;
+    }
+    if (type == Byte.class) return (T)Byte.valueOf(value);
+    if (type == Short.class) return (T)Short.valueOf(value);
+    if (type == Integer.class) return (T)Integer.valueOf(value);
+    if (type == Long.class) return (T)Long.valueOf(value);
+    if (type == Float.class) return (T)Float.valueOf(value);
+    if (type == Double.class) return (T)Double.valueOf(value);
+    if (type == Character.class) return (T)(Character)value.charAt(0);
+    if (type == String.class) return (T)value;
+    return null;
   }
 }

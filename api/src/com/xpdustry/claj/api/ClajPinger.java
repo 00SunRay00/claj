@@ -211,8 +211,8 @@ public class ClajPinger extends Client {
   }
 
   // Helpers
-  protected <T> void postTask(Cons<T> consumer, T object) { postTask(() -> consumer.get(object)); }
-  protected void postTask(Runnable run) { provider.postTask(run); }
+  protected <T> void postTask(Cons<T> consumer, T object) { postCallback(() -> consumer.get(object)); }
+  protected void postCallback(Runnable run) { provider.postCallback(run); }
 
   public boolean isRequestTimedOut() {
     return timeout > 0 && System.currentTimeMillis() >= timeout;
@@ -348,7 +348,7 @@ public class ClajPinger extends Client {
   }
 
   protected void runInfoNotFound() {
-    if (infoNotFound != null) postTask(infoNotFound);
+    if (infoNotFound != null) postCallback(infoNotFound);
     resetInfoState(null, null, null);
     close();
   }

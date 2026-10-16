@@ -104,9 +104,9 @@ public class ClajProxy extends ProxyClient {
   }
 
   // Helpers
-  protected <T1, T2> void postTask(Cons2<T1, T2> consumer, T1 t1, T2 t2) { postTask(() -> consumer.get(t1, t2)); }
-  protected <T> void postTask(Cons<T> consumer, T object) { postTask(() -> consumer.get(object)); }
-  protected void postTask(Runnable run) { provider.postTask(run); }
+  protected <T1, T2> void postTask(Cons2<T1, T2> consumer, T1 t1, T2 t2) { postCallback(() -> consumer.get(t1, t2)); }
+  protected <T> void postTask(Cons<T> consumer, T object) { postCallback(() -> consumer.get(object)); }
+  protected void postCallback(Runnable run) { provider.postCallback(run); }
 
   protected void runRoomCreated(long roomId) {
     if (roomCreated()) return;
