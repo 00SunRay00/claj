@@ -42,6 +42,8 @@ public class MindustryClajProxy extends ClajProxy {
     super(provider);
     // Try to fix some issues with entities not loading when receiving world
     forceTcp = true;
+    // Try to fix an android issue, that kills the connection when switching apps
+    pingInterval = 1000;
   }
 
   public static boolean isMindustryConnection(Connection con) {

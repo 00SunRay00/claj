@@ -43,7 +43,7 @@ import com.xpdustry.claj.common.net.NetListenerFilter;
  */
 public abstract class ProxyClient extends Client {
   public static int defaultTimeout = 5000; //ms
-  /** Delay between pings. */
+  /** Delay between pings. To keep connection alive. */
   public static int pingTime = 3000;
 
   // Redefine some internal states btw
@@ -60,6 +60,7 @@ public abstract class ProxyClient extends Client {
   protected NetListener conListener;
   protected volatile boolean shutdown = true, starting, connecting, closing;
   protected ClientReceiver receiver;
+  public int pingInterval = pingTime;
   protected long lastPing;
   protected Cons<Throwable> errorHandler;
 
@@ -143,7 +144,7 @@ public abstract class ProxyClient extends Client {
   public void updatePing() {
     if (!isConnected()) return;
     long now = System.currentTimeMillis();
-    if (now - lastPing <= pingTime) return;
+    if (now - lastPing <= pingInterval) return;
     lastPing = now;
     updateReturnTripTime();
   }
